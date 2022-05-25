@@ -1409,7 +1409,7 @@ MyList* insertValFirst(MyList* const list, LIST_TYPE newVal);
 #endif // ANSI_COLOR_FIESTA
 
 //  requires:
-//  __FILE__, __LINE__, __func__, pid, ppid
+//  __FILE__, __LINE__, __func__, pid, ppid, tid
 #define INFO_FORMAT GREEN_BLD"%s" RESET_ESC":" YELLLOW"%d"\
 		RESET_ESC" in " VIOLET_BLD"%s" RESET_ESC", PID:"\
 		BWHITE"%06ld" RESET_ESC" PPID:" BWHITE"%06ld"\
@@ -2261,6 +2261,20 @@ void* MY_NON_NULL(1)
 			for (; str[i] == c; --n)
 				leftShift(str + i, sz - i, 1);
 		return str;
+	}
+
+char* MY_NON_NULL(1)
+	removeNewline(char* str) {
+		// keep a copy to return? idk
+		char* ret = str;
+		for (; *str; ++str) { // lol
+			if ('\n' == *str && '\0' == *(str + 1)) {
+				*str = '\0';
+				break;
+			}
+		}
+
+		return ret;
 	}
 
 #define SIGEV_INFO_FORMAT "{notify:%d signo:%d value:{int:%d ptr:%p} funct:%p attr:%p tid:%ld}"

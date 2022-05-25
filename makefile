@@ -1,5 +1,5 @@
 # base filename goes here:
-FILENAME=rps
+FILENAME=game
 
 # 1 for ez compile,
 # 0 to see a few more useless warnings,
