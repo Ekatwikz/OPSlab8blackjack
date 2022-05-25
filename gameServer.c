@@ -161,8 +161,6 @@ void* threadFunc(void* voidArgs) {
 			send_(playerSocket, msgBuf, MSG_LEN, 0);
 		}
 
-		send_(playerSocket, msgBuf, MSG_LEN, 0);
-
 		// we'll just say that the player 1 handler thread
 		// is responsibe for cleanup, so that we don't get heap-use-after-free
 		// issues
