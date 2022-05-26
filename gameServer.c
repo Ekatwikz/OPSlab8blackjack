@@ -13,6 +13,14 @@
 // otherwise set 0
 #define ROTATE_TURNS 0
 
+// if your question says you should reject clients
+// when there aren't enough threads, then you
+// should set this to 1
+// otherwise 0
+// doesn't matter for us big boiz since we're using
+// queues anyway, but just give them want they want lol
+#define REJECT_EXCESS 1
+
 volatile sig_atomic_t sigint_received = 0;
 void sigint_handler(int sig) {
 	UNUSED(sig);
@@ -342,13 +350,14 @@ int main(int argc, char** argv) {
 				accept(serverSocket, (struct sockaddr*) game->player1Addr,
 					&clientAddrLen),
 				EINTR);
-		// if we got interrupted here we assume it's by SIGINT and we stop the loop
+		// if we got interrupted here we check if it's by SIGINT
 		if (EINTR == errno) {
 			FREE(game->player1Addr);
 			FREE(game);
-			break;
+
+			continue;
 		}
-		printf_("Main thread accepted %s as Player 1\n",
+		printf_("Main thread accepting %s as Player 1\n",
 				inet_ntoa(game->player1Addr->sin_addr));
 
 		// accept 2nd player
@@ -361,10 +370,42 @@ int main(int argc, char** argv) {
 			FREE(game->player1Addr);
 			FREE(game->player2Addr);
 			FREE(game);
-			break;
+
+			continue;
 		}
-		printf_("Main thread accepted %s as Player 2\n",
+		printf_("Main thread accepting %s as Player 2\n",
 				inet_ntoa(game->player2Addr->sin_addr));
+
+#if REJECT_EXCESS
+		// reject these guys if we don't have enough threads
+		pthread_mutex_lock_(&availableThreadsMutex);
+		if (availableThreads < 2) {
+			pthread_mutex_unlock_(&availableThreadsMutex);
+
+			char msgBuf[MSG_LEN + 1] = {0}; // +1 extra byte for '\0'
+
+			// reject Player 1
+			printf_("Main thread rejecting Player 1: %s\n",
+					inet_ntoa(game->player1Addr->sin_addr));
+			snprintf_(msgBuf, MSG_LEN, "Rejected, not enough threads\n");
+			send_(game->player1Socket, msgBuf, MSG_LEN, 0);
+			close_(game->player1Socket);
+
+			// reject Player 2
+			printf_("Main thread rejecting Player 2: %s\n",
+					inet_ntoa(game->player2Addr->sin_addr));
+			snprintf_(msgBuf, MSG_LEN, "Rejected, not enough threads\n");
+			send_(game->player2Socket, msgBuf, MSG_LEN, 0);
+			close_(game->player2Socket);
+
+			// cleanup
+			FREE(game->player1Addr);
+			FREE(game->player2Addr);
+			FREE(game);
+
+			continue;
+		} else pthread_mutex_unlock_(&availableThreadsMutex);
+#endif // REJECT_EXCESS
 
 		// make new barrier for this game
 		pthread_barrier_t gameBarrier = pthread_barrier_make(2);
