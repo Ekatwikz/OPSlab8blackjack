@@ -8,6 +8,11 @@
 #define MSG_LEN 50
 #define BACKLOG 2
 
+// if your question says "alternating moves is done using cond variables"
+// or something similar, set this to 1,
+// otherwise set 0
+#define ROTATE_TURNS 0
+
 volatile sig_atomic_t sigint_received = 0;
 void sigint_handler(int sig) {
 	UNUSED(sig);
@@ -26,6 +31,15 @@ typedef struct Game_ {
 
 	// we'll sync games at various points
 	pthread_barrier_t* barrier;
+
+	// we might have to order game turns
+	// and not just get messages in any order,
+	// in that case we need a cond variable
+#if ROTATE_TURNS
+	int turn;
+	pthread_mutex_t* turnMutex;
+	pthread_cond_t* turnCond;
+#endif // ROTATE_TURNS
 } Game;
 
 typedef struct ThreadArgs_ {
@@ -103,6 +117,36 @@ void* threadFunc(void* voidArgs) {
 		// change condition to however the game should end
 		// eg: here we """play""" 2 rounds of just receiving 'A' or 'B'
 		for (int roundNum = 1; roundNum <= 2; ++roundNum) {
+			// sync round start, might be useful
+			pthread_barrier_wait_(game->barrier);
+#if ROTATE_TURNS
+			if (handlesPlayer1) {
+				// player1 will be responsible for resetting round number
+				// if we're using it
+				game->turn = 1;
+			}
+#endif // ROTATE_TURNS
+			pthread_barrier_wait_(game->barrier);
+
+#if ROTATE_TURNS
+			// for player 2, we've got to wait until it's our turn
+			// this might need to be generalized if our question is changed
+			// to have more than 2 players...
+			if (!handlesPlayer1) {
+				printf_(SELF" waiting to be signaled for turn\n",
+						args->threadNum);
+
+				pthread_mutex_lock_(game->turnMutex);
+				while (game->turn != 2) {
+					pthread_cond_wait(game->turnCond, game->turnMutex);
+				}
+				pthread_mutex_unlock_(game->turnMutex);
+
+				printf_(SELF" signaled for turn\n",
+						args->threadNum);
+			}
+#endif // ROTATE_TURNS
+
 			// we'll loop until we get a usable message
 			// from the client
 			int playerMsg;
@@ -146,10 +190,27 @@ void* threadFunc(void* voidArgs) {
 				game->player2Msg = playerMsg;
 			}
 
-			// wait until the other guy receives a message
-			printf(SELF" waiting for other thread's msg\n",
+#if ROTATE_TURNS
+			// if we're sequencing turns,
+			// player 1 has to tell player 2 to start
+			// handling their guy, might also need to
+			// generalize this
+			if (handlesPlayer1) {
+				printf_(SELF" signaling for next turn\n",
+						args->threadNum);
+
+				pthread_mutex_lock_(game->turnMutex);
+				++game->turn;
+				pthread_cond_broadcast_(game->turnCond);
+				pthread_mutex_unlock_(game->turnMutex);
+			}
+#else // ROTATE_TURNS
+			// sync player messages on barrier, if we're not using
+			// cond variables
+			printf_(SELF" waiting for other thread's msg\n",
 					args->threadNum);
 			pthread_barrier_wait_(game->barrier);
+#endif // ROTATE_TURNS
 
 			// check the opponents message
 			int opponentMsg;
@@ -193,6 +254,10 @@ void* threadFunc(void* voidArgs) {
 			close_(game->player1Socket);
 			close_(game->player2Socket);
 			pthread_barrier_destroy_(game->barrier);
+#if ROTATE_TURNS
+			pthread_mutex_destroy_(game->turnMutex);
+			pthread_cond_destroy_(game->turnCond);
+#endif // ROTATE_TURNS
 
 			FREE(game->player1Addr);
 			FREE(game->player2Addr);
@@ -269,7 +334,7 @@ int main(int argc, char** argv) {
 		socklen_t clientAddrLen = sizeof(struct sockaddr_in);
 
 		// start setting up new game
-		Game* game = malloc(sizeof(Game));
+		Game* game = calloc(1, sizeof(Game));
 
 		// accept 1st player
 		game->player1Addr = malloc(clientAddrLen);
@@ -283,7 +348,7 @@ int main(int argc, char** argv) {
 			FREE(game);
 			break;
 		}
-		printf_("Main thread accepted %s as player 1\n",
+		printf_("Main thread accepted %s as Player 1\n",
 				inet_ntoa(game->player1Addr->sin_addr));
 
 		// accept 2nd player
@@ -298,12 +363,21 @@ int main(int argc, char** argv) {
 			FREE(game);
 			break;
 		}
-		printf_("Main thread accepted %s as player 2\n",
+		printf_("Main thread accepted %s as Player 2\n",
 				inet_ntoa(game->player2Addr->sin_addr));
 
 		// make new barrier for this game
 		pthread_barrier_t gameBarrier = pthread_barrier_make(2);
 		game->barrier = &gameBarrier;
+
+		// setup game turns, if we need
+#if ROTATE_TURNS
+		game->turn = 1;
+		pthread_mutex_t turnMutex = pthread_mutex_make();
+		game->turnMutex = &turnMutex;
+		pthread_cond_t turnCond = pthread_cond_make();
+		game->turnCond = &turnCond;
+#endif // ROTATE_TURNS
 
 		// insert pointer to game and signal 2 threads
 		// we insert it twice so that both threads that are woken receive it
