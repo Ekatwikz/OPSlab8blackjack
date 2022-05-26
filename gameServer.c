@@ -17,7 +17,7 @@ void sigint_handler(int sig) {
 typedef struct Game_ {
 	// we'll represent player messages with macro-d up ints
 	int player1Msg, player2Msg;
-#define MSG_DC -1
+#define MSG_DC -1 // client DC should be handled too
 #define MSG_A 1
 #define MSG_B 2
 
@@ -77,97 +77,121 @@ void* threadFunc(void* voidArgs) {
 
 		// get info about the new game
 		int playerSocket;
-		struct sockaddr_in* playerAddr;
+		struct sockaddr_in *playerAddr, *opponentAddr;
 		if (handlesPlayer1) {
 			playerSocket = game->player1Socket;
 			playerAddr = game->player1Addr;
+			opponentAddr = game->player2Addr;
 		} else {
 			playerSocket = game->player2Socket;
 			playerAddr = game->player2Addr;
+			opponentAddr = game->player1Addr;
 		}
-		printf_(SELF" signaled to handle %s as %d\n",
+
+		printf_(SELF" signaled to handle %s as Player %d\n",
 				args->threadNum, inet_ntoa(playerAddr->sin_addr),
 				handlesPlayer1 ? 1 : 2);
 
-		// we'll loop until we get a usable message
-		// from the client
-		int playerMsg;
-		char msgBuf[MSG_LEN + 1];
-		while (true) {
-			// receive message
-			memset(msgBuf, '\0', MSG_LEN + 1);
-			if (!recv_(playerSocket, msgBuf, MSG_LEN, 0)) {
-				// player DC-d here
-				playerMsg = MSG_DC;
-				break;
+		// send the player some info about the game,
+		// eg: opponent IP here lol
+		char msgBuf[MSG_LEN + 1] = {0}; // +1 extra byte for '\0'
+		snprintf_(msgBuf, MSG_LEN, "Opponent addr: %s\n",
+				inet_ntoa(opponentAddr->sin_addr));
+		send_(playerSocket, msgBuf, MSG_LEN, 0);
+
+		// main loop for game rounds
+		// change condition to however the game should end
+		// eg: here we """play""" 2 rounds of just receiving 'A' or 'B'
+		for (int roundNum = 1; roundNum <= 2; ++roundNum) {
+			// we'll loop until we get a usable message
+			// from the client
+			int playerMsg;
+			while (true) {
+				// receive message
+				memset(msgBuf, '\0', MSG_LEN + 1);
+				if (!recv_(playerSocket, msgBuf, MSG_LEN, 0)) {
+					// player DC-d here
+					playerMsg = MSG_DC;
+					break;
+				}
+
+				// clean msg up a little
+				// makes it easier to test with netcat/telnet
+				removeNewline(msgBuf);
+				printf_(SELF" received: \"%s\"\n",
+						args->threadNum, msgBuf);
+
+				// check the player's msg
+				if (!strcmp(msgBuf, "A")) {
+					playerMsg = MSG_A;
+					break;
+				} else if (!strcmp(msgBuf, "B")) {
+					playerMsg = MSG_B;
+					break;
+				} else {
+					printf_(SELF" requesting good message from player\n",
+							args->threadNum);
+
+					snprintf_(msgBuf, MSG_LEN, "Bruh send good msg lol\n");
+					send_(playerSocket, msgBuf, MSG_LEN, 0);
+				}
 			}
 
-			// clean msg up a little
-			// makes it easier to test with netcat/telnet
-			removeNewline(msgBuf);
-			printf_(SELF" received: \"%s\"\n",
-					args->threadNum, msgBuf);
+			// ?announce? the player's message
+			// so the other thread can see
+			// NB: we DON'T need mutexes b/c the piles of barriers around here
+			if (handlesPlayer1) {
+				game->player1Msg = playerMsg;
+			} else {
+				game->player2Msg = playerMsg;
+			}
 
-			// check the player's msg
-			if (!strcmp(msgBuf, "A")) {
-				playerMsg = MSG_A;
+			// wait until the other guy receives a message
+			printf(SELF" waiting for other thread's msg\n",
+					args->threadNum);
+			pthread_barrier_wait_(game->barrier);
+
+			// check the opponents message
+			int opponentMsg;
+			if (handlesPlayer1) {
+				opponentMsg = game->player2Msg;
+			} else {
+				opponentMsg = game->player1Msg;
+			}
+
+			// handle game state
+			if (playerMsg == MSG_DC) {
+				printf_(SELF"'s client DCd, game over\n",
+						args->threadNum);
+
 				break;
-			} else if (!strcmp(msgBuf, "B")) {
-				playerMsg = MSG_B;
+			} else if (opponentMsg == MSG_DC) {
+				printf_(SELF"'s opponent DCd, game over\n",
+						args->threadNum);
+
+				snprintf_(msgBuf, MSG_LEN, "Opponent ragequit, gg lol\n");
+				send_(playerSocket, msgBuf, MSG_LEN, 0);
+
 				break;
 			} else {
-				snprintf(msgBuf, MSG_LEN, "Bruh send good msg lol\n");
-				printf_(SELF" requesting good message from player\n",
-						args->threadNum);
+				snprintf_(msgBuf, MSG_LEN, "Round %d, You: %d, Opponent: %d\n",
+						roundNum, playerMsg, opponentMsg);
 				send_(playerSocket, msgBuf, MSG_LEN, 0);
 			}
 		}
 
-		// ?announce? the player's message
-		// so the other thread can see
-		// NB: we DON'T need mutexes b/c the piles of barriers around here
-		if (handlesPlayer1) {
-			game->player1Msg = playerMsg;
-		} else {
-			game->player2Msg = playerMsg;
-		}
-
-		// wait until the other guy receives a message
-		printf(SELF" waiting for other thread's msg\n",
-				args->threadNum);
+		// cleanup should first sync
 		pthread_barrier_wait_(game->barrier);
-
-		// check the opponents message
-		int opponentMsg;
-		if (handlesPlayer1) {
-			opponentMsg = game->player2Msg;
-		} else {
-			opponentMsg = game->player1Msg;
-		}
-
-		// handle game 
-		// TODO: handle game over
-		if (playerMsg == MSG_DC) {
-			printf_(SELF"'s client DCd, game over\n",
-					args->threadNum);
-		} else if (opponentMsg == MSG_DC) {
-			printf_(SELF"'s opponent DCd, game over\n",
-					args->threadNum);
-			snprintf(msgBuf, MSG_LEN, "%d: Opponent DCd, gg\n", args->threadNum);
-			send_(playerSocket, msgBuf, MSG_LEN, 0);
-		} else {
-			snprintf(msgBuf, MSG_LEN, "You: %d Opponent: %d\n",
-					playerMsg, opponentMsg);
-			send_(playerSocket, msgBuf, MSG_LEN, 0);
-		}
 
 		// we'll just say that the player 1 handler thread
 		// is responsibe for cleanup, so that we don't get heap-use-after-free
-		// issues
-		pthread_barrier_wait_(game->barrier);
+		// issues etc
 		if (handlesPlayer1) {
-			close(game->player1Socket);
-			close(game->player2Socket);
+			printf_(SELF": game ended, cleaning up\n",
+					args->threadNum);
+
+			close_(game->player1Socket);
+			close_(game->player2Socket);
 			pthread_barrier_destroy_(game->barrier);
 
 			FREE(game->player1Addr);
