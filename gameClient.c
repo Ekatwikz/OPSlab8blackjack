@@ -23,17 +23,22 @@ void* senderThread(void* voidArgs) {
 	ThreadArgs* args = (ThreadArgs*) voidArgs;
 
 	while (true) {
-		pause(); // tmp!!
+		char sendBuf[BUFSIZE + 1] = {0};
 
+		// get user input
+		// TODO: use select/poll for non-blocking scanf
+		if (scanf("%" TO_STR(BUFSIZE) "s", sendBuf) == EOF) { // Ctrl + D
+			break;
+		}
+
+		// check if game is over
 		pthread_mutex_lock_(args->gameOverMutex);
 		if (*args->gameOver) {
 			pthread_mutex_unlock_(args->gameOverMutex);
 			break;
 		} else pthread_mutex_unlock_(args->gameOverMutex);
 
-		// send something to the server
-		char sendBuf[BUFSIZE] = {0};
-		sprintf_(sendBuf, "Hello from client!\n");
+		// otherwise send something to the server
 		send_(args->clientSock, sendBuf, strlen(sendBuf), 0);
 	}
 

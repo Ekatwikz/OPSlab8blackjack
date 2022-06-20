@@ -8,17 +8,7 @@
 #define MSG_LEN 50
 #define BACKLOG 2
 
-// if your question says "alternating moves is done using cond variables"
-// or something similar, set this to 1,
-// otherwise set 0
 #define ROTATE_TURNS 0
-
-// if your question says you should reject clients
-// when there aren't enough threads, then you
-// should set this to 1
-// otherwise 0
-// doesn't matter for us big boiz since we're using
-// queues anyway, but just give them want they want lol
 #define REJECT_EXCESS 1
 
 volatile sig_atomic_t sigint_received = 0;
@@ -40,9 +30,6 @@ typedef struct Game_ {
 	// we'll sync games at various points
 	pthread_barrier_t* barrier;
 
-	// we might have to order game turns
-	// and not just get messages in any order,
-	// in that case we need a cond variable
 #if ROTATE_TURNS
 	int turn;
 	pthread_mutex_t* turnMutex;
@@ -61,7 +48,7 @@ typedef struct ThreadArgs_ {
 	pthread_mutex_t* availableThreadsMutex;
 } ThreadArgs;
 
-// easier to debug with lol:
+// easier to debug with:
 #define SELF BWHITE"Thread %d"RESET_ESC
 void* threadFunc(void* voidArgs) {
 	pthread_setcanceltype_(PTHREAD_CANCEL_DEFERRED, NULL);
@@ -138,8 +125,6 @@ void* threadFunc(void* voidArgs) {
 
 #if ROTATE_TURNS
 			// for player 2, we've got to wait until it's our turn
-			// this might need to be generalized if our question is changed
-			// to have more than 2 players...
 			if (!handlesPlayer1) {
 				printf_(SELF" waiting to be signaled for turn\n",
 						args->threadNum);
@@ -220,7 +205,7 @@ void* threadFunc(void* voidArgs) {
 			pthread_barrier_wait_(game->barrier);
 #endif // ROTATE_TURNS
 
-			// check the opponents message
+			// check the opponent's message
 			int opponentMsg;
 			if (handlesPlayer1) {
 				opponentMsg = game->player2Msg;
@@ -308,14 +293,11 @@ int main(int argc, char** argv) {
 
 	// thread 1, 3, 5, ... etc will get Sem1
 	//    '   2, 4, 6, ...       '      Sem2
-	// b/c both lab samples said that we gotta have one thread
-	// per client, so we'll have to wake up multiple threads for
+	// b/c we'll have to wake up multiple threads for
 	// each new game
 	sem_t newGameSem1 = sem_make(0);
 	sem_t newGameSem2 = sem_make(0);
 
-	// we miiight need to count the threads that
-	// aren't doing anything
 	int availableThreads = 0;
 	pthread_mutex_t availableThreadsMutex = pthread_mutex_make();
 
