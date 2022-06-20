@@ -2,10 +2,6 @@
 #define USAGE_STRING "serverAddress clientAddress port"
 #include "katwikOpsys.h"
 
-//#define SERVER_ADDRESS "127.0.4.20"
-//#define CLIENT_ADDRESS "127.0.0.69"
-
-#define DESIRED_PORT 3500
 #define BUFSIZE 50
 
 #define THREAD_COUNT 2
